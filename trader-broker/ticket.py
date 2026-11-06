@@ -43,10 +43,12 @@ STRING_FIELDS = ("qty", "notional", "limit_price", "stop_price", "trail_price", 
                  "take_profit_limit_price", "stop_loss_stop_price", "stop_loss_limit_price")
 TIF_WORDS = {"day": "good for today", "gtc": "good until canceled", "opg": "at the open",
              "cls": "at the close", "ioc": "immediate or cancel", "fok": "fill or kill"}
-YES_WORDS = ("yes", "y")
-BATCH_WORDS = {"all", "every", "everything", "rest", "remaining", "them", "both", "batch", "each"}
+YES_WORDS = ("yes", "y", "sí", "si")
+BATCH_WORDS = {"all", "every", "everything", "rest", "remaining", "them", "both", "batch", "each",
+               "todas", "todos", "todo", "resto", "demás", "ambas", "cada"}
 DOUBT_WORDS = {"no", "not", "dont", "don't", "wait", "cancel", "stop", "but", "maybe", "later",
-               "hold", "unless", "if"}
+               "hold", "unless", "if",
+               "espera", "aguanta", "cancela", "pero", "quizás", "quizas", "luego", "después", "despues", "mejor"}
 
 
 class TicketError(Exception):
@@ -154,14 +156,14 @@ def amount_numbers(order):
     return nums
 
 
-def parse_yes(reply, order, batch_symbols=()):
+def parse_yes(reply, order, batch_symbols=(), index=None):
     """Is this reply an explicit yes for THIS one order? Returns (ok, why)."""
     raw = (reply or "").strip()
     if not raw:
         return False, "the reply is empty"
     if "?" in raw:
         return False, "the reply is a question, not a yes"
-    words = re.findall(r"[a-z']+", raw.lower())
+    words = re.findall(r"[a-záéíóúñü']+", raw.lower())
     if not words or words[0] not in YES_WORDS:
         return False, "only a reply that starts with \"yes\" counts (not ok, sure, go, do it)"
     if BATCH_WORDS & set(words):
@@ -174,6 +176,11 @@ def parse_yes(reply, order, batch_symbols=()):
     named = tokens & others
     if named:
         return False, "the reply names %s, but this order is for %s" % (", ".join(sorted(named)), sym)
+    ref = re.compile(r"(?:orden|order|#)\s*(\d+)", re.I)
+    for n in ref.findall(raw):
+        if index is not None and int(n) != index:
+            return False, "the reply names order %s, but this is order %d" % (n, index)
+    raw = ref.sub(" ", raw)
     nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", raw)]
     if nums:
         want = amount_numbers(order)
@@ -355,7 +362,7 @@ def cmd_approve(a):
     ready, label, rv = status_of(order, risk, state, today)
     if not ready:
         raise TicketError("order %d is not ready: %s" % (a.index, label))
-    ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders])
+    ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders], a.index)
     if not ok:
         print("Not recorded: %s. Ask the user again with the ticket for order %d." % (why, a.index))
         return 1
@@ -385,6 +392,43 @@ def cmd_decline(a):
     state.setdefault("orders", []).append(rec)
     write_json(a.state, state)
     print("Recorded: you said no to order %d (%s). Nothing was sent." % (a.index, plain(order)))
+    return 0
+
+
+def cmd_approve_batch(a):
+    """Juanito: un solo sí para todas las órdenes READY, solo en cuenta paper."""
+    orders, cfg, risk, state, today = _load(a)
+    if not cfg.get("paper", True):
+        raise TicketError("batch approval only works on a paper account; live orders need one yes each")
+    raw = (a.reply or "").strip()
+    words = re.findall(r"[a-záéíóúñü']+", raw.lower())
+    if "?" in raw or not words or words[0] not in YES_WORDS:
+        print("Not recorded: only a reply that starts with \"sí\" or \"yes\" counts.")
+        return 1
+    if not BATCH_WORDS & set(words):
+        print("Not recorded: a batch yes must say it covers all of them (\"sí a todas\").")
+        return 1
+    if DOUBT_WORDS & set(words[1:]):
+        print("Not recorded: the reply has a condition or a doubt in it; ask again.")
+        return 1
+    done = 0
+    for i, order in enumerate(orders, 1):
+        ready, label, rv = status_of(order, risk, state, today)
+        if not ready:
+            continue
+        state.setdefault("orders", []).append({
+            "at": now_iso(), "date": today, "index": i, "fingerprint": fingerprint(order),
+            "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
+            "plain": plain(order), "status": "approved", "reply": a.reply, "batch": True,
+            "paper": True, "broker": cfg.get("broker", "alpaca")})
+        print("Recorded batch yes for order %d: %s" % (i, plain(order)))
+        print(json.dumps(tool_input(order)))
+        done += 1
+    write_json(a.state, state)
+    if not done:
+        print("No READY orders to approve.")
+        return 1
+    print("Place each one with place_stock_order (Allow once / Deny each), then ticket.py result.")
     return 0
 
 
@@ -457,6 +501,9 @@ def main(argv=None):
     common(p)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--reply", required=True, help="the user's reply, word for word")
+    p = sub.add_parser("approve-batch", help="one yes for every READY order (paper only)")
+    common(p)
+    p.add_argument("--reply", required=True, help="the user's reply, word for word")
     p = sub.add_parser("decline", help="record a no")
     common(p)
     p.add_argument("--index", type=int, required=True)
@@ -487,7 +534,7 @@ def main(argv=None):
         ap.print_help()
         return 1
     try:
-        return {"show": cmd_show, "approve": cmd_approve, "decline": cmd_decline, "result": cmd_result,
+        return {"show": cmd_show, "approve": cmd_approve, "approve-batch": cmd_approve_batch, "decline": cmd_decline, "result": cmd_result,
                 "fill": cmd_fill, "log": cmd_log}[a.cmd](a)
     except TicketError as e:
         print("ticket.py: %s" % e, file=sys.stderr)
