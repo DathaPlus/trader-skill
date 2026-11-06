@@ -107,7 +107,7 @@ class Fetcher(object):
             time.sleep(self.pause - gap)
         self._last = time.time()
         req = urllib.request.Request(url, headers={"User-Agent": self.ua,
-                                                   "Accept-Encoding": "gzip"})
+                                                   "Accept-Encoding": "gzip", "Accept": "*/*"})
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = resp.read()

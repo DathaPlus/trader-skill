@@ -134,7 +134,7 @@ class Fetcher(object):
         if sec and not self.ua:
             raise EdgarError(UA_HELP)
         headers = {"User-Agent": self.ua or "trader-skill/1.0",
-                   "Accept-Encoding": "gzip"}
+                   "Accept-Encoding": "gzip", "Accept": "*/*"}
         return self._open(urllib.request.Request(url, headers=headers), url)
 
     def post_json(self, url, payload, headers=None):
