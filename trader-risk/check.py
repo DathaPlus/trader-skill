@@ -153,6 +153,9 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None):
         typ = str(o.get("type", "market")).strip().lower()
         tif = str(o.get("time_in_force", "day")).strip().lower()
         qty, notional = o.get("qty"), o.get("notional")
+        # Juanito: cripto spot solo si la config lo permite y el par está en la lista (BTC/USD…)
+        crypto = "/" in sym and bool(c.get("allow_crypto")) and sym in {
+            str(x).upper() for x in c.get("crypto_allowlist") or []}
         value = None
 
         # format
@@ -174,7 +177,9 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None):
             reasons.append("format: unknown order type %r" % typ)
         if tif not in TIFS:
             reasons.append("format: unknown time_in_force %r" % tif)
-        if notional is not None and (typ != "market" or tif != "day"):
+        if notional is not None and crypto and (typ != "market" or tif not in ("gtc", "ioc")):
+            reasons.append("format: a crypto notional order must be a market order with time_in_force gtc or ioc")
+        elif notional is not None and not crypto and (typ != "market" or tif != "day"):
             reasons.append("format: a notional (dollar) order must be a market order with time_in_force day")
         if typ in ("limit", "stop_limit") and o.get("limit_price") is None:
             reasons.append("format: a %s order needs a limit_price" % typ)
@@ -193,6 +198,8 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None):
                                "(\"allow_options\": false)" % sym)
             else:
                 warns.append("option order: options can lose 100%% of what you pay")
+        elif crypto:
+            warns.append("crypto: trades 24/7 and can move 10% in a day; spot only, no margin")
         elif sym and ("/" in sym or not TICKER.match(sym)):
             reasons.append("asset: %s does not look like a US stock or ETF ticker; "
                            "this pack trades stocks and ETFs only" % sym)

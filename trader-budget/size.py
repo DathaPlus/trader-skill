@@ -360,7 +360,8 @@ def orders_from(result, source=""):
             o["qty"] = str(int(p["shares"]))
         else:
             o["notional"] = _num(p["dollars"])
-        o.update({"type": "market", "time_in_force": "day", "why": why})
+        # Juanito: Alpaca no acepta "day" en cripto; los pares llevan "/" (BTC/USD)
+        o.update({"type": "market", "time_in_force": "gtc" if "/" in p["ticker"] else "day", "why": why})
         out.append(o)
     return out
 
